@@ -52,7 +52,7 @@ struct SendView: MVIView {
 				paymentRequest = model.request
 				isWarningDisplayed = true
 			}
-			else if let model = newModel as? Scan.ModelValidate {
+			else if let model = newModel as? Scan.ModelValidateRequest {
 				paymentRequest = model.request
 			}
 			else if newModel is Scan.ModelSending {
@@ -79,7 +79,7 @@ struct SendView: MVIView {
 				isWarningDisplayed: $isWarningDisplayed
 			)
 
-		case let model as Scan.ModelValidate:
+		case let model as Scan.ModelValidateRequest:
 			ValidateView(model: model, postIntent: mvi.intent)
 
 		case let m as Scan.ModelSending:
@@ -102,12 +102,14 @@ struct SendView: MVIView {
 				comment: "Error message - scanning lightning invoice"
 			)
 		
-		} else if model.reason is Scan.BadRequestReasonIsLnUrl {
+		} else if let reason = model.reason as? Scan.BadRequestReasonUnsupportedLnUrl {
 			
-			msg = NSLocalizedString(
-				"Phoenix does not support the LNURL protocol yet",
-				comment: "Error message - scanning lightning invoice"
-			)
+			msg = "hrp = \(reason.hrp), data = \(reason.data)"
+			
+		//	msg = NSLocalizedString(
+		//		"Phoenix does not support the LNURL protocol yet",
+		//		comment: "Error message - scanning lightning invoice"
+		//	)
 			
 		} else if model.reason is Scan.BadRequestReasonIsBitcoinAddress {
 			
@@ -247,10 +249,7 @@ struct ScanView: View, ViewName {
 	func showWarning() -> Void {
 		log.trace("[\(viewName)] showWarning()")
 		
-		guard
-			let paymentRequest = paymentRequest,
-			let model = mvi.model as? Scan.ModelDangerousRequest
-		else {
+		guard let model = mvi.model as? Scan.ModelDangerousRequest else {
 			return
 		}
 		
@@ -260,7 +259,6 @@ struct ScanView: View, ViewName {
 			DangerousInvoiceAlert(
 				model: model,
 				postIntent: mvi.intent,
-				paymentRequest: paymentRequest,
 				isShowing: $isWarningDisplayed,
 				ignoreScanner: $ignoreScanner
 			)
@@ -272,7 +270,6 @@ struct DangerousInvoiceAlert : View, ViewName {
 
 	let model: Scan.ModelDangerousRequest
 	let postIntent: (Scan.Intent) -> Void
-	let paymentRequest: String
 
 	@Binding var isShowing: Bool
 	@Binding var ignoreScanner: Bool
@@ -377,14 +374,17 @@ struct DangerousInvoiceAlert : View, ViewName {
 		log.trace("[\(viewName)] didConfirm()")
 		
 		isShowing = false
-		postIntent(Scan.IntentConfirmDangerousRequest(request: paymentRequest))
+		postIntent(Scan.IntentConfirmDangerousRequest(
+			request: model.request,
+			paymentRequest: model.paymentRequest
+		))
 		popoverState.close()
 	}
 }
 
 struct ValidateView: View, ViewName {
 	
-	let model: Scan.ModelValidate
+	let model: Scan.ModelValidateRequest
 	let postIntent: (Scan.Intent) -> Void
 
 	@State var number: Double = 0.0
@@ -682,7 +682,7 @@ struct ValidateView: View, ViewName {
 		case .bitcoin(let bitcoinUnit):
 			let msat = Utils.toMsat(from: amt, bitcoinUnit: bitcoinUnit)
 			postIntent(Scan.IntentSend(
-				request: model.request,
+				paymentRequest: model.paymentRequest,
 				amount: Lightning_kmpMilliSatoshi(msat: msat)
 			))
 			
@@ -692,7 +692,7 @@ struct ValidateView: View, ViewName {
 				
 				let msat = Utils.toMsat(fromFiat: amt, exchangeRate: exchangeRate)
 				postIntent(Scan.IntentSend(
-					request: model.request,
+					paymentRequest: model.paymentRequest,
 					amount: Lightning_kmpMilliSatoshi(msat: msat)
 				))
 			}
@@ -745,18 +745,18 @@ class SendView_Previews: PreviewProvider {
 
 	static var previews: some View {
 		
-		NavigationView {
-			SendView().mock(Scan.ModelValidate(
-				request: request,
-				amountMsat: 1_500,
-				expiryTimestamp: nil,
-				requestDescription: "1 Blockaccino",
-				balanceMsat: 300_000_000
-			))
-		}
-		.modifier(GlobalEnvironment())
-		.preferredColorScheme(.light)
-		.previewDevice("iPhone 8")
+//		NavigationView {
+//			SendView().mock(Scan.ModelValidateRequest(
+//				request: request,
+//				amountMsat: 1_500,
+//				expiryTimestamp: nil,
+//				requestDescription: "1 Blockaccino",
+//				balanceMsat: 300_000_000
+//			))
+//		}
+//		.modifier(GlobalEnvironment())
+//		.preferredColorScheme(.light)
+//		.previewDevice("iPhone 8")
 		
 		NavigationView {
 			SendingView(model: Scan.ModelSending())

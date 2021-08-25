@@ -1,5 +1,6 @@
 package fr.acinq.phoenix.controllers.payments
 
+import fr.acinq.bitcoin.Bech32
 import fr.acinq.bitcoin.ByteVector32
 import fr.acinq.lightning.Feature
 import fr.acinq.lightning.Features
@@ -49,7 +50,7 @@ class AppScanController(
             peerManager.getPeer().channelsFlow.collect { channels ->
                 val balanceMsat = balanceMsat(channels)
                 model {
-                    if (this is Scan.Model.Validate) {
+                    if (this is Scan.Model.ValidateRequest) {
                         this.copy(balanceMsat = balanceMsat)
                     } else {
                         this
@@ -74,130 +75,137 @@ class AppScanController(
     override fun process(intent: Scan.Intent) {
         when (intent) {
             is Scan.Intent.Parse -> launch {
-                when (val result = readPaymentRequest(intent.request)) {
-                    is Either.Left -> { // result.value: Scan.BadRequestReason
-                        model(Scan.Model.BadRequest(result.value))
-                    }
-                    is Either.Right -> {
-                        val paymentRequest: PaymentRequest = result.value
-                        val isDangerousAmountless = if (paymentRequest.amount != null) {
-                            false
-                        } else {
-                            // amountless invoice -> dangerous unless full trampoline is in effect
-                            val features = Features(paymentRequest.features)
-                            !features.hasFeature(Feature.TrampolinePayment)
-                        }
-                        if (isDangerousAmountless) {
-                            model(
-                                Scan.Model.DangerousRequest(
-                                Scan.DangerousRequestReason.IsAmountlessInvoice,
-                                intent.request
-                            ))
-                        } else if (paymentRequest.nodeId == peerManager.getPeer().nodeParams.nodeId) {
-                            model(
-                                Scan.Model.DangerousRequest(
-                                Scan.DangerousRequestReason.IsOwnInvoice,
-                                intent.request
-                            ))
-                        } else {
-                            validatePaymentRequest(intent.request, paymentRequest)
-                        }
-                    }
-                }
+                processParse(intent)
             }
             is Scan.Intent.ConfirmDangerousRequest -> launch {
-                when (val result = readPaymentRequest(intent.request)) {
-                    is Either.Left -> { // result.value: Scan.BadRequestReason
-                        model(Scan.Model.BadRequest(result.value))
-                    }
-                    is Either.Right -> { // result.value: PaymentRequest
-                        validatePaymentRequest(intent.request, result.value)
-                    }
-                }
+                processConfirmDangerousRequest(intent)
             }
-            is Scan.Intent.Send -> {
-                launch {
-                    when (val result = readPaymentRequest((intent.request))) {
-                        is Either.Left -> { // result.value: Scan.BadRequestReason
-                            model(Scan.Model.BadRequest(result.value))
-                        }
-                        is Either.Right -> {
-                            val paymentRequest: PaymentRequest = result.value
-                            val paymentId = UUID.randomUUID()
-                            peerManager.getPeer().send(
-                                SendPayment(
-                                    paymentId = paymentId,
-                                    amount = intent.amount,
-                                    recipient = paymentRequest.nodeId,
-                                    details = OutgoingPayment.Details.Normal(paymentRequest)
-                                )
-                            )
-                            model(Scan.Model.Sending)
-                        }
-                    }
-                }
+            is Scan.Intent.Send -> launch {
+                processSend(intent)
             }
         }
     }
 
+    private suspend fun processParse(
+        intent: Scan.Intent.Parse
+    ) {
+        val input = intent.request.replace("\\u00A0", "").trim() // \u00A0 = '\n'
+
+        // Is it a Lightning invoice ?
+        readPaymentRequest(input)?.let { return when (it) {
+            is Either.Left -> { // it.value: Scan.BadRequestReason
+                model(Scan.Model.BadRequest(it.value))
+            }
+            is Either.Right -> {
+                val paymentRequest = it.value
+                val isDangerousAmountless = if (paymentRequest.amount != null) {
+                    false
+                } else {
+                    // amountless invoice -> dangerous unless full trampoline is in effect
+                    val features = Features(paymentRequest.features)
+                    !features.hasFeature(Feature.TrampolinePayment)
+                }
+                if (isDangerousAmountless) {
+                    model(Scan.Model.DangerousRequest(
+                        reason = Scan.DangerousRequestReason.IsAmountlessInvoice,
+                        request = intent.request,
+                        paymentRequest = paymentRequest
+                    ))
+                } else if (paymentRequest.nodeId == peerManager.getPeer().nodeParams.nodeId) {
+                    model(Scan.Model.DangerousRequest(
+                        reason = Scan.DangerousRequestReason.IsOwnInvoice,
+                        request = intent.request,
+                        paymentRequest = paymentRequest
+                    ))
+                } else {
+                    model(makeValidateRequest(intent.request, paymentRequest))
+                }
+            }
+        }}
+
+        // Is it an LNURL ?
+        readLNURL(input)?.let { return when (it) {
+            is Either.Left -> { // it.value: Scan.BadRequestReason
+                model(Scan.Model.BadRequest(it.value))
+            }
+            is Either.Right -> {
+               model(Scan.Model.LoginRequest(
+                   request = intent.request,
+                   auth = it.value
+               ))
+            }
+        }}
+
+        // Is it a bitcoin address ?
+        readBitcoinAddress(input).let {
+            model(Scan.Model.BadRequest(it))
+        }
+    }
+
+    private suspend fun processConfirmDangerousRequest(
+        intent: Scan.Intent.ConfirmDangerousRequest
+    ) {
+        model(makeValidateRequest(intent.request, intent.paymentRequest))
+    }
+
+    private suspend fun processSend(
+        intent: Scan.Intent.Send
+    ) {
+        val paymentRequest = intent.paymentRequest
+        val paymentId = UUID.randomUUID()
+        peerManager.getPeer().send(
+            SendPayment(
+                paymentId = paymentId,
+                amount = intent.amount,
+                recipient = paymentRequest.nodeId,
+                details = OutgoingPayment.Details.Normal(paymentRequest)
+            )
+        )
+        model(Scan.Model.Sending)
+    }
+
+    private suspend fun makeValidateRequest(
+        request: String,
+        paymentRequest: PaymentRequest
+    ): Scan.Model.ValidateRequest {
+        val balanceMsat = balanceMsat(peerManager.getPeer().channels)
+        val expiryTimestamp = paymentRequest.expirySeconds?.let {
+            paymentRequest.timestampSeconds + it
+        }
+        return Scan.Model.ValidateRequest(
+            request = request,
+            paymentRequest = paymentRequest,
+            amountMsat = paymentRequest.amount?.toLong(),
+            expiryTimestamp = expiryTimestamp,
+            requestDescription = paymentRequest.description,
+            balanceMsat = balanceMsat
+        )
+    }
+
+    private fun trimMatchingPrefix(
+        input: String,
+        prefixes: List<String>
+    ): Pair<Boolean, String> {
+        for (prefix in prefixes) {
+            if (input.startsWith(prefix)) {
+                return Pair(true, input.drop(prefix.length))
+            }
+        }
+        return Pair(false, input)
+    }
+
     private suspend fun readPaymentRequest(
         input: String
-    ) : Either<Scan.BadRequestReason, PaymentRequest> {
+    ) : Either<Scan.BadRequestReason, PaymentRequest>? {
 
-        var request = input.replace("\\u00A0", "").trim() // \u00A0 = '\n'
-        request = when {
-            request.startsWith("lightning://", true) -> request.drop(12)
-            request.startsWith("lightning:", true) -> request.drop(10)
-            request.startsWith("bitcoin://", true) -> request.drop(10)
-            request.startsWith("bitcoin:", true) -> request.drop(8)
-            else -> request
-        }
+        val (_, request) = trimMatchingPrefix(input, listOf(
+            "lightning://", "lightning:", "bitcoin://", "bitcoin:"
+        ))
 
         val paymentRequest = try {
             PaymentRequest.read(request) // <- throws
         } catch (t: Throwable) {
-            null
-        }
-
-        if (paymentRequest == null) {
-            // The qrcode doesn't appear to be for a lightning invoice.
-            // Is it a LNURL ?
-            val isLnUrl = when {
-                input.startsWith("lightning://lnurl1", true) -> true
-                input.startsWith("lightning:lnurl1", true) -> true
-                input.startsWith("lnurl1", true) -> true
-                else -> false
-            }
-            if (isLnUrl) {
-                return Either.Left(Scan.BadRequestReason.IsLnUrl)
-            }
-            // Is it for a bitcoin address ?
-            return when (val result = utilities.parseBitcoinAddress(input)) {
-                is Either.Left -> {
-                    val reason: Utilities.BitcoinAddressError = result.value
-                    when (reason) {
-                        is Utilities.BitcoinAddressError.ChainMismatch -> {
-                            // Two problems here:
-                            // - they're scanning a bitcoin address, but we don't support swap-out yet
-                            // - the bitcoin address is for the wrong chain
-                            Either.Left(
-                                Scan.BadRequestReason.ChainMismatch(
-                                    myChain = reason.myChain,
-                                    requestChain = reason.addrChain
-                                )
-                            )
-                        }
-                        else -> {
-                            Either.Left(Scan.BadRequestReason.UnknownFormat)
-                        }
-                    }
-                }
-                is Either.Right -> {
-                    // Yup, it's a bitcoin address.
-                    // But we don't support swap-out yet.
-                    Either.Left(Scan.BadRequestReason.IsBitcoinAddress)
-                }
-            }
+            return null
         }
 
         val requestChain = when (paymentRequest.prefix) {
@@ -221,19 +229,85 @@ class AppScanController(
         }
     }
 
-    private suspend fun validatePaymentRequest(request: String, paymentRequest: PaymentRequest) {
-        val balanceMsat = balanceMsat(peerManager.getPeer().channels)
-        val expiryTimestamp = paymentRequest.expirySeconds?.let {
-            paymentRequest.timestampSeconds + it
+    private fun readLNURL(input: String): Either<Scan.BadRequestReason, LnUrlAuth>? {
+
+        val (_, request) = trimMatchingPrefix(input, listOf(
+            "lightning://", "lightning:", "bitcoin://", "bitcoin:"
+        ))
+
+        val (hrp, data) = try {
+            Bech32.decode(request) // <- throws
+        } catch (t: Throwable) {
+            return null
         }
-        model(
-            Scan.Model.Validate(
-                request = request,
-                amountMsat = paymentRequest.amount?.toLong(),
-                expiryTimestamp = expiryTimestamp,
-                requestDescription = paymentRequest.description,
-                balanceMsat = balanceMsat
-            )
-        )
+
+        if (hrp != "lnurl") {
+            return null
+        }
+
+        val dataStr = buildString {
+            data.forEach {
+                append(it)
+            }
+        }
+
+        val url = try {
+            io.ktor.http.Url(urlString = dataStr)
+        } catch (t: Throwable) {
+            return Either.Left(Scan.BadRequestReason.UnsupportedLnUrl(hrp, dataStr, 1))
+        }
+
+        val tag = url.parameters.get("tag")
+        if (tag != "login") {
+            return Either.Left(Scan.BadRequestReason.UnsupportedLnUrl(hrp, dataStr, 2))
+        }
+
+        val k1Hex = url.parameters.get("k1")
+        if (k1Hex == null) {
+            return Either.Left(Scan.BadRequestReason.UnknownFormat)
+        }
+
+        val k1 = try {
+            ByteVector32.fromValidHex(k1Hex)
+        } catch (t: Throwable) {
+            return Either.Left(Scan.BadRequestReason.UnknownFormat)
+        }
+
+        val action = url.parameters.get("action")?.let {
+            LnUrlAuth.Action.parse(it)
+        }
+
+        return Either.Right(LnUrlAuth(
+            domain = url.host,
+            k1 = k1,
+            action = action
+        ))
+    }
+
+    private fun readBitcoinAddress(input: String): Scan.BadRequestReason {
+
+        return when (val result = utilities.parseBitcoinAddress(input)) {
+            is Either.Left -> {
+                when (val reason = result.value) {
+                    is Utilities.BitcoinAddressError.ChainMismatch -> {
+                        // Two problems here:
+                        // - they're scanning a bitcoin address, but we don't support swap-out yet
+                        // - the bitcoin address is for the wrong chain
+                        Scan.BadRequestReason.ChainMismatch(
+                            myChain = reason.myChain,
+                            requestChain = reason.addrChain
+                        )
+                    }
+                    else -> {
+                        Scan.BadRequestReason.UnknownFormat
+                    }
+                }
+            }
+            is Either.Right -> {
+                // Yup, it's a bitcoin address.
+                // But we don't support swap-out yet.
+                Scan.BadRequestReason.IsBitcoinAddress
+            }
+        }
     }
 }
