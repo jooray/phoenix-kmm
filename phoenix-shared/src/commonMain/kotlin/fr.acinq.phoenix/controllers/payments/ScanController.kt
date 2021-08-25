@@ -198,8 +198,14 @@ class AppScanController(
         input: String,
         prefixes: List<String>
     ): Pair<Boolean, String> {
+
+        // The trimming is done in a case-insenstive manner.
+        // Because often QR codes will use upper-case, such as:
+        // LIGHTNING:LNURL1...
+
+        val inputLowerCase = input.toLowerCase()
         for (prefix in prefixes) {
-            if (input.startsWith(prefix)) {
+            if (inputLowerCase.startsWith(prefix.toLowerCase())) {
                 return Pair(true, input.drop(prefix.length))
             }
         }
