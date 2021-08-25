@@ -18,7 +18,10 @@ import fr.acinq.phoenix.managers.DatabaseManager
 import fr.acinq.phoenix.managers.PeerManager
 import fr.acinq.phoenix.managers.Utilities
 import fr.acinq.phoenix.data.Chain
+import fr.acinq.phoenix.data.LNUrl
+import fr.acinq.phoenix.managers.LNUrlManager
 import fr.acinq.phoenix.utils.localCommitmentSpec
+import io.ktor.http.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -29,6 +32,7 @@ class AppScanController(
     loggerFactory: LoggerFactory,
     firstModel: Scan.Model?,
     private val peerManager: PeerManager,
+    private val lnurlManager: LNUrlManager,
     private val databaseManager: DatabaseManager,
     private val utilities: Utilities,
     private val chain: Chain
@@ -39,8 +43,9 @@ class AppScanController(
     constructor(business: PhoenixBusiness, firstModel: Scan.Model?): this(
         loggerFactory = business.loggerFactory,
         firstModel = firstModel,
-        databaseManager = business.databaseManager,
         peerManager = business.peerManager,
+        lnurlManager = business.lnUrlManager,
+        databaseManager = business.databaseManager,
         utilities = business.util,
         chain = business.chain,
     )
@@ -82,6 +87,9 @@ class AppScanController(
             }
             is Scan.Intent.Send -> launch {
                 processSend(intent)
+            }
+            is Scan.Intent.Login -> launch {
+                processLogin(intent)
             }
         }
     }
@@ -125,14 +133,11 @@ class AppScanController(
 
         // Is it an LNURL ?
         readLNURL(input)?.let { return when (it) {
-            is Either.Left -> { // it.value: Scan.BadRequestReason
-                model(Scan.Model.BadRequest(it.value))
+            is Either.Left -> { // it.value: LnUrl.Auth
+                model(Scan.Model.LoginRequest(auth = it.value))
             }
-            is Either.Right -> {
-               model(Scan.Model.LoginRequest(
-                   request = intent.request,
-                   auth = it.value
-               ))
+            is Either.Right -> { // it.value: Url
+                model(Scan.Model.BadRequest(Scan.BadRequestReason.UnsupportedLnUrl))
             }
         }}
 
@@ -162,6 +167,13 @@ class AppScanController(
             )
         )
         model(Scan.Model.Sending)
+    }
+
+    private suspend fun processLogin(
+        intent: Scan.Intent.Login
+    ) {
+        model(Scan.Model.LoggingIn(auth = intent.auth))
+        // Todo...
     }
 
     private suspend fun makeValidateRequest(
@@ -229,59 +241,17 @@ class AppScanController(
         }
     }
 
-    private fun readLNURL(input: String): Either<Scan.BadRequestReason, LnUrlAuth>? {
+    private fun readLNURL(input: String): Either<LNUrl.Auth, Url>? {
 
         val (_, request) = trimMatchingPrefix(input, listOf(
-            "lightning://", "lightning:", "bitcoin://", "bitcoin:"
+            "lightning://", "lightning:"
         ))
 
-        val (hrp, data) = try {
-            Bech32.decode(request) // <- throws
+        return try {
+            lnurlManager.interactiveExtractLNUrl(request)
         } catch (t: Throwable) {
             return null
         }
-
-        if (hrp != "lnurl") {
-            return null
-        }
-
-        val dataStr = buildString {
-            data.forEach {
-                append(it)
-            }
-        }
-
-        val url = try {
-            io.ktor.http.Url(urlString = dataStr)
-        } catch (t: Throwable) {
-            return Either.Left(Scan.BadRequestReason.UnsupportedLnUrl(hrp, dataStr, 1))
-        }
-
-        val tag = url.parameters.get("tag")
-        if (tag != "login") {
-            return Either.Left(Scan.BadRequestReason.UnsupportedLnUrl(hrp, dataStr, 2))
-        }
-
-        val k1Hex = url.parameters.get("k1")
-        if (k1Hex == null) {
-            return Either.Left(Scan.BadRequestReason.UnknownFormat)
-        }
-
-        val k1 = try {
-            ByteVector32.fromValidHex(k1Hex)
-        } catch (t: Throwable) {
-            return Either.Left(Scan.BadRequestReason.UnknownFormat)
-        }
-
-        val action = url.parameters.get("action")?.let {
-            LnUrlAuth.Action.parse(it)
-        }
-
-        return Either.Right(LnUrlAuth(
-            domain = url.host,
-            k1 = k1,
-            action = action
-        ))
     }
 
     private fun readBitcoinAddress(input: String): Scan.BadRequestReason {

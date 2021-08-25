@@ -16,10 +16,12 @@
 
 package fr.acinq.phoenix.managers
 
+import fr.acinq.lightning.utils.Either
 import fr.acinq.phoenix.PhoenixBusiness
 import fr.acinq.phoenix.data.LNUrl
 import io.ktor.client.*
 import io.ktor.client.request.*
+import io.ktor.http.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import org.kodein.log.LoggerFactory
@@ -41,6 +43,21 @@ class LNUrlManager(
      * Will execute an HTTP request for some urls and parse the response into an actionable LNUrl object.
      */
     suspend fun extractLNUrl(source: String): LNUrl {
+        return when (val result = interactiveExtractLNUrl(source)) {
+            is Either.Left -> result.value
+            is Either.Right -> continueLnUrl(result.value)
+        }
+    }
+
+    /**
+     * Attempts to extract a Bech32 URL from the string.
+     * On success:
+     * - if the LnUrl is a simple Auth, it's returned immediately
+     * - otherwise the Url is returned (call `continueLnUrl` to fetch & parse the Url)
+     *
+     * Throws an exception if source is malformed, or invalid.
+     */
+    fun interactiveExtractLNUrl(source: String): Either<LNUrl.Auth, Url> {
         val url = try {
             LNUrl.parseBech32Url(source)
         } catch (e1: Exception) {
@@ -59,14 +76,19 @@ class LNUrlManager(
                 if (k1.isNullOrBlank()) {
                     throw LNUrl.Error.Auth.MissingK1
                 } else {
-                    LNUrl.Auth(url, k1)
+                    Either.Left(LNUrl.Auth(url, k1))
                 }
             }
-            // query the url and parse metadata
-            else -> {
-                val json = LNUrl.handleLNUrlResponse(httpClient.get(url))
-                LNUrl.parseLNUrlMetadata(json)
-            }
+            else -> Either.Right(url)
         }
+    }
+
+    /**
+     * Executes the HTTP request for the LnUrl and parses the response
+     * into an actionable LNUrl object.
+     */
+    suspend fun continueLnUrl(url: Url): LNUrl {
+        val json = LNUrl.handleLNUrlResponse(httpClient.get(url))
+        return LNUrl.parseLNUrlMetadata(json)
     }
 }

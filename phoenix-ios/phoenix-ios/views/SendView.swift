@@ -82,9 +82,12 @@ struct SendView: MVIView {
 		case let model as Scan.ModelValidateRequest:
 			ValidateView(model: model, postIntent: mvi.intent)
 
-		case let m as Scan.ModelSending:
-			SendingView(model: m)
+		case let model as Scan.ModelSending:
+			SendingView(model: model)
 
+		case _ as Scan.ModelLoginRequest:
+			LoginView(mvi: mvi)
+			
 		default:
 			fatalError("Unknown model \(mvi.model)")
 		}
@@ -102,14 +105,12 @@ struct SendView: MVIView {
 				comment: "Error message - scanning lightning invoice"
 			)
 		
-		} else if let reason = model.reason as? Scan.BadRequestReasonUnsupportedLnUrl {
+		} else if model.reason is Scan.BadRequestReasonUnsupportedLnUrl {
 			
-			msg = "hrp = \(reason.hrp), data = \(reason.data)"
-			
-		//	msg = NSLocalizedString(
-		//		"Phoenix does not support the LNURL protocol yet",
-		//		comment: "Error message - scanning lightning invoice"
-		//	)
+			msg = NSLocalizedString(
+				"Phoenix does not support this type of LNURL yet",
+				comment: "Error message - scanning lightning invoice"
+			)
 			
 		} else if model.reason is Scan.BadRequestReasonIsBitcoinAddress {
 			
@@ -217,7 +218,7 @@ struct ScanView: View, ViewName {
 			NSLocalizedString("Scan a QR code", comment: "Navigation bar title"),
 			displayMode: .inline
 		)
-		.zIndex(2) // [SendingView, ValidateView, ScanView]
+		.zIndex(3) // [SendingView, ValidateView, LoginView, ScanView]
 		.transition(
 			.asymmetric(
 				insertion: .identity,
@@ -535,7 +536,7 @@ struct ValidateView: View, ViewName {
 			NSLocalizedString("Confirm Payment", comment: "Navigation bar title"),
 			displayMode: .inline
 		)
-		.zIndex(1) // [SendingView, ValidateView, ScanView]
+		.zIndex(1) // [SendingView, ValidateView, LoginView, ScanView]
 		.transition(.asymmetric(insertion: .identity, removal: .opacity))
 		.onAppear() {
 			onAppear()
@@ -711,6 +712,7 @@ struct ValidateView: View, ViewName {
 struct SendingView: View {
 	let model: Scan.ModelSending
 
+	@ViewBuilder
 	var body: some View {
 		
 		ZStack {
@@ -733,7 +735,117 @@ struct SendingView: View {
 			NSLocalizedString("Sending payment", comment: "Navigation bar title"),
 			displayMode: .inline
 		)
-		.zIndex(0) // [SendingView, ValidateView, ScanView]
+		.zIndex(0) // [SendingView, ValidateView, LoginView, ScanView]
+	}
+}
+
+struct LoginView: View, ViewName {
+	
+	@ObservedObject var mvi: MVIState<Scan.Model, Scan.Intent>
+	
+	@ViewBuilder
+	var body: some View {
+		
+		ZStack {
+		
+			if AppDelegate.showTestnetBackground {
+				Image("testnet_bg")
+					.resizable(resizingMode: .tile)
+			}
+			
+			main
+		}
+		.frame(maxHeight: .infinity)
+		.background(Color.primaryBackground)
+		.edgesIgnoringSafeArea([.bottom, .leading, .trailing]) // top is nav bar
+		.navigationBarTitle(
+			NSLocalizedString("lnurl-auth", comment: "Navigation bar title"),
+			displayMode: .inline
+		)
+		.zIndex(2) // [SendingView, ValidateView, LoginView, ScanView]
+	}
+	
+	@ViewBuilder
+	var main: some View {
+		
+		VStack(alignment: HorizontalAlignment.center, spacing: 30) {
+			
+			Spacer()
+			
+			Text("You can use your wallet to anonymously sign and authorize an action on:")
+				.multilineTextAlignment(.center)
+			
+			Text(domain())
+				.font(.headline)
+				.multilineTextAlignment(.center)
+			
+			Button {
+				loginButtonTapped()
+			} label: {
+				HStack {
+					Image(systemName: "bolt")
+						.renderingMode(.template)
+						.resizable()
+						.aspectRatio(contentMode: .fit)
+						.foregroundColor(Color.white)
+						.frame(width: 22, height: 22)
+					Text(buttonTitle())
+						.font(.title2)
+						.foregroundColor(Color.white)
+				}
+				.padding(.top, 4)
+				.padding(.bottom, 5)
+				.padding([.leading, .trailing], 24)
+			}
+			.buttonStyle(ScaleButtonStyle(
+				backgroundFill: Color.appAccent
+			))
+			
+			Divider().frame(width: 100)
+				.padding(.vertical, 10)
+			
+			Text("No personal data will be shared with this service.")
+				.font(.callout)
+				.foregroundColor(.secondary)
+				.multilineTextAlignment(.center)
+			
+			Spacer()
+			Spacer()
+			
+		} // </VStack>
+		.padding(.horizontal, 20)
+	}
+	
+	func domain() -> String {
+		
+		if let model = mvi.model as? Scan.ModelLoginRequest {
+			return model.auth.url.host
+		} else {
+			return "?"
+		}
+	}
+	
+	func buttonTitle() -> String {
+		
+		if let model = mvi.model as? Scan.ModelLoginRequest {
+			if let action = model.auth.action() {
+				switch action {
+					case .register_ : return NSLocalizedString("Register",     comment: "lnurl-auth: login button title")
+					case .login     : return NSLocalizedString("Login",        comment: "lnurl-auth: login button title")
+					case .link      : return NSLocalizedString("Link",         comment: "lnurl-auth: login button title")
+					case .auth      : fallthrough
+					default         : break
+				}
+			}
+		}
+		
+		return NSLocalizedString("Authenticate", comment: "lnurl-auth: login button title")
+	}
+	
+	func loginButtonTapped() {
+		log.trace("[\(viewName)] loginButtonTapped()")
+		
+		
 	}
 }
 

@@ -1,40 +1,17 @@
 package fr.acinq.phoenix.controllers.payments
 
-import fr.acinq.bitcoin.ByteVector
-import fr.acinq.bitcoin.ByteVector32
 import fr.acinq.lightning.MilliSatoshi
 import fr.acinq.lightning.payment.PaymentRequest
 import fr.acinq.phoenix.data.Chain
 import fr.acinq.phoenix.controllers.MVI
-
-data class LnUrlAuth(
-    val domain: String,
-    val k1: ByteVector32,
-    val action: Action?
-) {
-    enum class Action {
-        Register,
-        Login,
-        Link,
-        Auth;
-
-        companion object {
-            fun parse(str: String) = when (str.toLowerCase()) {
-                "register" -> Register
-                "login" -> Login
-                "link" -> Link
-                "auth" -> Auth
-                else -> null
-            }
-        }
-    }
-}
+import fr.acinq.phoenix.data.LNUrl
+import io.ktor.http.*
 
 object Scan {
 
     sealed class BadRequestReason {
         data class ChainMismatch(val myChain: Chain, val requestChain: Chain?): BadRequestReason()
-        data class UnsupportedLnUrl(val hrp: String, val data: String, val wtf: Int): BadRequestReason()
+        object UnsupportedLnUrl: BadRequestReason()
         object IsBitcoinAddress: BadRequestReason()
         object UnknownFormat: BadRequestReason()
         object AlreadyPaidInvoice: BadRequestReason()
@@ -65,8 +42,14 @@ object Scan {
         ): Model()
         object Sending: Model()
         data class LoginRequest(
-            val request: String,
-            val auth: LnUrlAuth
+            val auth: LNUrl.Auth
+        ): Model()
+        data class LoggingIn(
+            val auth: LNUrl.Auth
+        ): Model()
+        data class LoginResult(
+            val auth: LNUrl.Auth,
+            val success: Boolean
         ): Model()
     }
 
@@ -82,6 +65,8 @@ object Scan {
             val paymentRequest: PaymentRequest,
             val amount: MilliSatoshi
         ) : Intent()
+        data class Login(
+            val auth: LNUrl.Auth
+        ) : Intent()
     }
-
 }
