@@ -16,6 +16,8 @@
 
 package fr.acinq.phoenix.managers
 
+import fr.acinq.bitcoin.ByteVector32
+import fr.acinq.bitcoin.Crypto
 import fr.acinq.lightning.utils.Either
 import fr.acinq.phoenix.PhoenixBusiness
 import fr.acinq.phoenix.data.LNUrl
@@ -24,16 +26,21 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import org.kodein.log.LoggerFactory
 import org.kodein.log.newLogger
 
 class LNUrlManager(
+    loggerFactory: LoggerFactory,
     private val httpClient: HttpClient,
-    loggerFactory: LoggerFactory
+    private val walletManager: WalletManager
 ) : CoroutineScope by MainScope() {
+
     constructor(business: PhoenixBusiness) : this(
+        loggerFactory = business.loggerFactory,
         httpClient = business.httpClient,
-        loggerFactory = business.loggerFactory
+        walletManager = business.walletManager
     )
 
     private val log = newLogger(loggerFactory)
@@ -90,5 +97,37 @@ class LNUrlManager(
     suspend fun continueLnUrl(url: Url): LNUrl {
         val json = LNUrl.handleLNUrlResponse(httpClient.get(url))
         return LNUrl.parseLNUrlMetadata(json)
+    }
+
+    suspend fun requestAuth(auth: LNUrl.Auth): LNUrl.Auth.Result {
+        val wallet = walletManager.wallet.filterNotNull().first()
+
+        // According to the spec, the "full domain name" is to be used for key derivation:
+        // > LN SERVICE should carefully choose which subdomain (if any) will be used as
+        // > LNURL-auth endpoint and stick to chosen subdomain in future. For example,
+        // > if `auth.site.com` was initially chosen then changing it to, say,
+        // > `login.site.com` will result in different account for each user because
+        // > full domain name is used by wallets as material for key derivation.
+        // >
+        // > LN SERVICE should consider giving meaningful names to chosen subdomains
+        // > since LN WALLET may show a full domain name to users on login attempt.
+        // > For example, `auth.site.com` is less confusing than `ksf03.site.com`.
+        //
+        // Spec: https://github.com/fiatjaf/lnurl-rfc/blob/luds/04.md
+        //
+        val domain = auth.url.host
+        val key = wallet.lnurlAuthLinkingKey(domain)
+        val signedK1 = Crypto.compact2der(Crypto.sign(
+            data = ByteVector32.fromValidHex(auth.k1),
+            privateKey = key
+        )).toHex()
+
+        val builder = URLBuilder(auth.url)
+        builder.parameters.append(name = "sig", value = signedK1)
+        builder.parameters.append(name = "key", value = key.publicKey().toString())
+        val url = builder.build()
+
+        LNUrl.handleLNUrlResponse(httpClient.get(url)) // throws on any/all non-success
+        return LNUrl.Auth.Result.fromAction(auth.action())
     }
 }

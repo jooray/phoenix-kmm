@@ -85,7 +85,9 @@ struct SendView: MVIView {
 		case let model as Scan.ModelSending:
 			SendingView(model: model)
 
-		case _ as Scan.ModelLoginRequest:
+		case _ as Scan.ModelLoginRequest,
+		     _ as Scan.ModelLoggingIn,
+		     _ as Scan.ModelLoginResult:
 			LoginView(mvi: mvi)
 			
 		default:
@@ -779,27 +781,32 @@ struct LoginView: View, ViewName {
 				.font(.headline)
 				.multilineTextAlignment(.center)
 			
-			Button {
-				loginButtonTapped()
-			} label: {
-				HStack {
-					Image(systemName: "bolt")
-						.renderingMode(.template)
-						.resizable()
-						.aspectRatio(contentMode: .fit)
-						.foregroundColor(Color.white)
-						.frame(width: 22, height: 22)
-					Text(buttonTitle())
-						.font(.title2)
-						.foregroundColor(Color.white)
+			if let model = mvi.model as? Scan.ModelLoginResult {
+				
+				Text(model.error == nil ? "Success" : "You Suck")
+				
+			} else {
+				Button {
+					loginButtonTapped()
+				} label: {
+					HStack {
+						Image(systemName: "bolt")
+							.renderingMode(.template)
+							.imageScale(.large)
+							.foregroundColor(Color.white)
+						Text(buttonTitle())
+							.foregroundColor(Color.white)
+					}
+					.font(.title2)
+					.padding(.top, 4)
+					.padding(.bottom, 5)
+					.padding([.leading, .trailing], 24)
 				}
-				.padding(.top, 4)
-				.padding(.bottom, 5)
-				.padding([.leading, .trailing], 24)
+				.buttonStyle(ScaleButtonStyle(
+					backgroundFill: Color.appAccent
+				))
+				.disabled(mvi.model is Scan.ModelLoggingIn)
 			}
-			.buttonStyle(ScaleButtonStyle(
-				backgroundFill: Color.appAccent
-			))
 			
 			Divider().frame(width: 100)
 				.padding(.vertical, 10)
@@ -816,36 +823,44 @@ struct LoginView: View, ViewName {
 		.padding(.horizontal, 20)
 	}
 	
-	func domain() -> String {
+	var auth: LNUrl.Auth? {
 		
 		if let model = mvi.model as? Scan.ModelLoginRequest {
-			return model.auth.url.host
+			return model.auth
+		} else if let model = mvi.model as? Scan.ModelLoggingIn {
+			return model.auth
+		} else if let model = mvi.model as? Scan.ModelLoginResult {
+			return model.auth
 		} else {
-			return "?"
+			return nil
 		}
+	}
+	
+	func domain() -> String {
+		
+		return auth?.url.host ?? "?"
 	}
 	
 	func buttonTitle() -> String {
 		
-		if let model = mvi.model as? Scan.ModelLoginRequest {
-			if let action = model.auth.action() {
-				switch action {
-					case .register_ : return NSLocalizedString("Register",     comment: "lnurl-auth: login button title")
-					case .login     : return NSLocalizedString("Login",        comment: "lnurl-auth: login button title")
-					case .link      : return NSLocalizedString("Link",         comment: "lnurl-auth: login button title")
-					case .auth      : fallthrough
-					default         : break
-				}
+		if let action = auth?.action() {
+			switch action {
+				case .register_ : return NSLocalizedString("Register",     comment: "lnurl-auth: login button title")
+				case .login     : return NSLocalizedString("Login",        comment: "lnurl-auth: login button title")
+				case .link      : return NSLocalizedString("Link",         comment: "lnurl-auth: login button title")
+				case .auth      : fallthrough
+				default         : break
 			}
 		}
-		
 		return NSLocalizedString("Authenticate", comment: "lnurl-auth: login button title")
 	}
 	
 	func loginButtonTapped() {
 		log.trace("[\(viewName)] loginButtonTapped()")
 		
-		
+		if let model = mvi.model as? Scan.ModelLoginRequest {
+			mvi.intent(Scan.IntentLogin(auth: model.auth))
+		}
 	}
 }
 

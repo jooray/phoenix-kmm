@@ -173,7 +173,11 @@ class AppScanController(
         intent: Scan.Intent.Login
     ) {
         model(Scan.Model.LoggingIn(auth = intent.auth))
-        // Todo...
+        val error = try {
+            lnurlManager.requestAuth(auth = intent.auth)
+            null
+        } catch (t: Throwable) { t }
+        model(Scan.Model.LoginResult(auth = intent.auth, error = error))
     }
 
     private suspend fun makeValidateRequest(

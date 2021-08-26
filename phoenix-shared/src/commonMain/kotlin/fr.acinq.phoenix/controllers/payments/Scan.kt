@@ -49,7 +49,7 @@ object Scan {
         ): Model()
         data class LoginResult(
             val auth: LNUrl.Auth,
-            val success: Boolean
+            val error: Throwable?
         ): Model()
     }
 

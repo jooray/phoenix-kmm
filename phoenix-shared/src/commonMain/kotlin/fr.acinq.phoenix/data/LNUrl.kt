@@ -61,6 +61,21 @@ sealed class LNUrl {
                 }
             }
         }
+
+        enum class Result {
+            Registered, LoggedIn, Linked, Authed;
+
+            companion object {
+                fun fromAction(action: Action?): Result {
+                    return action?.let { when (it) {
+                        Action.Register -> Registered
+                        Action.Login -> LoggedIn
+                        Action.Link -> Linked
+                        Action.Auth -> Authed
+                    }} ?: Authed
+                }
+            }
+        }
     }
 
     data class Withdraw(
