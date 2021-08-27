@@ -6,7 +6,10 @@ import fr.acinq.phoenix.data.Chain
 import fr.acinq.phoenix.controllers.MVI
 import fr.acinq.phoenix.data.LNUrl
 import io.ktor.http.*
+import kotlin.time.Duration
+import kotlin.time.ExperimentalTime
 
+@OptIn(ExperimentalTime::class)
 object Scan {
 
     sealed class BadRequestReason {
@@ -66,7 +69,8 @@ object Scan {
             val amount: MilliSatoshi
         ) : Intent()
         data class Login(
-            val auth: LNUrl.Auth
+            val auth: LNUrl.Auth,
+            val minSuccessDelay: Duration = Duration.ZERO
         ) : Intent()
     }
 }

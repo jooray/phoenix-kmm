@@ -22,11 +22,15 @@ import fr.acinq.phoenix.data.LNUrl
 import fr.acinq.phoenix.managers.LNUrlManager
 import fr.acinq.phoenix.utils.localCommitmentSpec
 import io.ktor.http.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.kodein.log.LoggerFactory
+import kotlin.time.Duration
+import kotlin.time.ExperimentalTime
+import kotlin.time.TimeSource
 
 class AppScanController(
     loggerFactory: LoggerFactory,
@@ -169,15 +173,25 @@ class AppScanController(
         model(Scan.Model.Sending)
     }
 
+    @OptIn(ExperimentalTime::class)
     private suspend fun processLogin(
         intent: Scan.Intent.Login
     ) {
         model(Scan.Model.LoggingIn(auth = intent.auth))
+        val start = TimeSource.Monotonic.markNow()
         val error = try {
             lnurlManager.requestAuth(auth = intent.auth)
             null
         } catch (t: Throwable) { t }
-        model(Scan.Model.LoginResult(auth = intent.auth, error = error))
+        if (error != null) {
+            model(Scan.Model.LoginResult(auth = intent.auth, error = error))
+        } else {
+            val pending = intent.minSuccessDelay - start.elapsedNow()
+            if (pending > Duration.ZERO) {
+                delay(pending)
+            }
+            model(Scan.Model.LoginResult(auth = intent.auth, error = error))
+        }
     }
 
     private suspend fun makeValidateRequest(
