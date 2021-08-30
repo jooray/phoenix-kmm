@@ -25,6 +25,12 @@ object Scan {
         object IsOwnInvoice: DangerousRequestReason()
     }
 
+    sealed class LoginError {
+        data class ServerError(val details: LNUrl.Error.RemoteFailure): LoginError()
+        data class NetworkError(val details: Throwable): LoginError()
+        data class OtherError(val details: Throwable): LoginError()
+    }
+
     sealed class Model : MVI.Model() {
         object Ready: Model()
         data class BadRequest(
@@ -52,7 +58,7 @@ object Scan {
         ): Model()
         data class LoginResult(
             val auth: LNUrl.Auth,
-            val error: Throwable?
+            val error: LoginError?
         ): Model()
     }
 
@@ -70,7 +76,7 @@ object Scan {
         ) : Intent()
         data class Login(
             val auth: LNUrl.Auth,
-            val minSuccessDelay: Duration = Duration.ZERO
+            val minSuccessDelaySeconds: Double = 0.0
         ) : Intent()
     }
 }

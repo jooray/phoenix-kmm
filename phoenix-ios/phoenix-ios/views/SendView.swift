@@ -856,10 +856,20 @@ struct LoginView: View, ViewName {
 			}
 			.frame(width: 100, height: 10)
 			
-			Text("No personal data will be shared with this service.")
-				.font(.callout)
-				.foregroundColor(.secondary)
-				.multilineTextAlignment(.center)
+			if let errorStr = errorText() {
+				
+				Text(errorStr)
+					.font(.callout)
+					.foregroundColor(.appNegative)
+					.multilineTextAlignment(.center)
+				
+			} else {
+				
+				Text("No personal data will be shared with this service.")
+					.font(.callout)
+					.foregroundColor(.secondary)
+					.multilineTextAlignment(.center)
+			}
 			
 			Spacer()
 			Spacer()
@@ -914,6 +924,34 @@ struct LoginView: View, ViewName {
 		return NSLocalizedString("Authenticated", comment: "lnurl-auth: success text")
 	}
 	
+	func errorText() -> String? {
+		
+		if let model = mvi.model as? Scan.ModelLoginResult, let error = model.error {
+			
+			if let error = error as? Scan.LoginErrorServerError {
+				if let details = error.details as? LNUrl.ErrorRemoteFailureCode {
+					let frmt = NSLocalizedString("Server returned HTTP status code %d", comment: "error details")
+					return String(format: frmt, details.code.value)
+				
+				} else if let details = error.details as? LNUrl.ErrorRemoteFailureDetailed {
+					let frmt = NSLocalizedString("Server returned error: %@", comment: "error details")
+					return String(format: frmt, details.reason)
+				
+				} else {
+					return NSLocalizedString("Server returned unreadable response", comment: "error details")
+				}
+				
+			} else if error is Scan.LoginErrorNetworkError {
+				return NSLocalizedString("Network error. Check your internet connection.", comment: "error details")
+				
+			} else {
+				return NSLocalizedString("An unknown error occurred.", comment: "error details")
+			}
+		}
+		
+		return nil
+	}
+	
 	func loginButtonTapped() {
 		log.trace("[\(viewName)] loginButtonTapped()")
 		
@@ -943,7 +981,7 @@ struct LoginView: View, ViewName {
 			// This leads to less confusion, and a happier user.
 			// Which hopefully leads to more lnurl-auth adoption.
 			//
-			mvi.intent(Scan.IntentLogin(auth: model.auth, minSuccessDelay: 1.6))
+			mvi.intent(Scan.IntentLogin(auth: model.auth, minSuccessDelaySeconds: 1.6))
 		}
 	}
 }

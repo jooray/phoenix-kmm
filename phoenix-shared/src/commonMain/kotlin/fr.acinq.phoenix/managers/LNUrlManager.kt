@@ -23,6 +23,7 @@ import fr.acinq.phoenix.PhoenixBusiness
 import fr.acinq.phoenix.data.LNUrl
 import io.ktor.client.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
@@ -127,7 +128,17 @@ class LNUrlManager(
         builder.parameters.append(name = "key", value = key.publicKey().toString())
         val url = builder.build()
 
-        LNUrl.handleLNUrlResponse(httpClient.get(url)) // throws on any/all non-success
+        val response: HttpResponse = try {
+            httpClient.get(url)
+        } catch (sre: io.ktor.client.features.ServerResponseException) {
+            // ktor throws an exception when we get a non-200 response from the server.
+            // That's not what we want. We'd like to handle the JSON error ourselves.
+            sre.response
+        } catch (t: Throwable) {
+            throw LNUrl.Error.RemoteFailure.CouldNotConnect(origin = url.host)
+        }
+
+        LNUrl.handleLNUrlResponse(response) // throws on any/all non-success
         return LNUrl.Auth.Result.fromAction(auth.action())
     }
 }

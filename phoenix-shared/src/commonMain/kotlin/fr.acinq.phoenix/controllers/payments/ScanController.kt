@@ -31,6 +31,7 @@ import org.kodein.log.LoggerFactory
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.TimeSource
+import kotlin.time.seconds
 
 class AppScanController(
     loggerFactory: LoggerFactory,
@@ -182,11 +183,17 @@ class AppScanController(
         val error = try {
             lnurlManager.requestAuth(auth = intent.auth)
             null
-        } catch (t: Throwable) { t }
+        } catch (e: LNUrl.Error.RemoteFailure.CouldNotConnect) {
+            Scan.LoginError.NetworkError(details = e)
+        } catch (e: LNUrl.Error.RemoteFailure) {
+            Scan.LoginError.ServerError(details = e)
+        } catch (e: Throwable) {
+            Scan.LoginError.OtherError(details = e)
+        }
         if (error != null) {
             model(Scan.Model.LoginResult(auth = intent.auth, error = error))
         } else {
-            val pending = intent.minSuccessDelay - start.elapsedNow()
+            val pending = intent.minSuccessDelaySeconds.seconds - start.elapsedNow()
             if (pending > Duration.ZERO) {
                 delay(pending)
             }
